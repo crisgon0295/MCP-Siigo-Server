@@ -14,12 +14,18 @@ try {
   const login = await request("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "admin", password: "orbit-demo" }) });
   const session = login.response.headers.get("set-cookie")?.split(";")[0];
   if (!session) throw new Error("No session cookie");
-  const tested = await request("/api/installation/test", { method: "POST", headers: { "Content-Type": "application/json", Cookie: session }, body: JSON.stringify({ companyName: "Smoke", siigoUsername: "Demo@siigo.com", accessKey: " demo ", partnerId: "orbitSmoke" }) });
-  if (tested.body.installation?.companyName !== "Smoke" || tested.body.installation?.siigoUsername !== "Demo@siigo.com") throw new Error("Current form values were not saved before testing");
-  const rotated = await request("/api/api-key/rotate", { method: "POST", headers: { Cookie: session } });
-  const initialized = await request("/mcp", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${rotated.body.apiKey}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "1" } } }) });
+  const created = await request("/api/clients", { method: "POST", headers: { "Content-Type": "application/json", Cookie: session }, body: JSON.stringify({ companyName: "Smoke" }) });
+  const id = created.body.id;
+  const tested = await request(`/api/clients/${id}/test`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: session }, body: JSON.stringify({ companyName: "Smoke", siigoUsername: "Demo@siigo.com", accessKey: " demo ", partnerId: "orbitSmoke" }) });
+  if (tested.body.client?.companyName !== "Smoke" || tested.body.client?.siigoUsername !== "Demo@siigo.com") throw new Error("Current form values were not saved before testing");
+  const rotated = await request(`/api/clients/${id}/api-key/rotate`, { method: "POST", headers: { Cookie: session } });
+  const clients = await request("/api/clients", { headers: { Cookie: session } });
+  if (clients.body.length !== 1 || clients.body[0].id !== id) throw new Error("Client isolation failed");
+  await request(`/api/clients/${id}/usage?period=30d`, { headers: { Cookie: session } });
+  await request(`/api/clients/${id}/errors`, { headers: { Cookie: session } });
+  const initialized = await request(`/mcp/${id}`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${rotated.body.apiKey}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "1" } } }) });
   if (initialized.body.result?.serverInfo?.name !== "Orbit Siigo") throw new Error("MCP initialization failed");
-  console.log("Smoke test passed: health, auth, encrypted config, API key and MCP");
+  console.log("Smoke test passed: health, auth, isolated client, encrypted config, usage, API key and MCP");
 } finally {
   server.kill();
   try { fs.rmSync(statePath); } catch {}

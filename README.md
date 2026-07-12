@@ -1,56 +1,51 @@
-# Orbit — plataforma MCP para Siigo
+# Orbit — centro MCP para Siigo
 
-Aplicación autocontenida para instalar una integración Siigo por cliente. Incluye panel administrativo, credenciales cifradas, API key rotativa, auditoría, herramientas MCP y Docker Compose para Dokploy.
+Plataforma administrativa multi-cliente para conectar Siigo con paneles, automatizaciones y agentes de IA mediante MCP Streamable HTTP. Cada cliente conserva credenciales, API key, auditoría, métricas y fallos aislados.
 
-## Verla localmente
+## Desarrollo local
 
 ```powershell
 Copy-Item .env.example .env
-# Edita .env y cambia ADMIN_PASSWORD, SESSION_SECRET y CONFIG_ENCRYPTION_KEY
 npm.cmd install
 npm.cmd run dev
 ```
 
-Abre `http://localhost:3000`. Si activas `DEMO_MODE=true`, puedes probar el recorrido completo sin credenciales reales de Siigo.
+Abre `http://localhost:3000`. Con `DEMO_MODE=true` puedes probar todo el recorrido sin llamar a Siigo. Las credenciales demo por defecto son `admin` / `orbit-demo`; cámbialas fuera de desarrollo.
 
-## Primer uso
+## Flujo administrativo
 
-1. Inicia sesión con `ADMIN_USERNAME` y `ADMIN_PASSWORD`.
-2. En **Conexión Siigo**, guarda empresa, usuario API, Access Key y Partner-ID.
-3. Pulsa **Probar conexión**.
-4. En **Acceso MCP**, rota la API key y cópiala al panel cliente.
-5. El consumidor se conecta a `https://tu-dominio/mcp` con `Authorization: Bearer <API_KEY>`.
+1. Abre **Clientes** y crea o selecciona una empresa.
+2. En **Conexión Siigo**, guarda usuario API, Access Key y Partner-ID y valida la conexión.
+3. En **Conectar MCP**, genera la API key del cliente. Solo se muestra completa una vez.
+4. Conecta el consumidor a `https://tu-dominio/mcp/<CLIENT_ID>` usando `Authorization: Bearer <API_KEY>`.
+5. Supervisa uso, últimas acciones y fallos desde el monitor exclusivo del cliente.
 
-La API key solo se muestra al rotarla. Las credenciales Siigo se cifran con AES-256-GCM y nunca vuelven al navegador.
+Los datos existentes de la versión de instalación única se migran automáticamente al primer cliente sin perder credenciales, API key ni auditoría.
 
-## Desplegar en Dokploy
+## Despliegue en Dokploy
 
-1. Sube este repositorio a GitHub/GitLab o conéctalo por Git.
-2. Crea un servicio **Docker Compose** y selecciona `docker-compose.yml`.
-3. Copia las variables de `.env.example` al apartado **Environment** y reemplaza todos los secretos.
-4. En **Domains**, agrega el dominio y selecciona el servicio `orbit-siigo`, puerto `3000`, HTTPS activo.
-5. Despliega y espera que el healthcheck indique estado saludable.
+1. Crea un servicio **Docker Compose** apuntando a este repositorio y a `docker-compose.yml`.
+2. Copia `.env.example` a las variables del servicio y reemplaza todos los secretos.
+3. Asigna el dominio al servicio `orbit-siigo`, puerto `3000`, con HTTPS.
+4. Despliega y confirma que `/health` responde con `status: ok`.
 
-El volumen `orbit_data` conserva configuración y auditoría entre despliegues. Haz backup de ese volumen y conserva `CONFIG_ENCRYPTION_KEY`; perder esa clave hace imposible descifrar las credenciales guardadas.
+El volumen `orbit_data` conserva clientes y auditoría. Respalda el volumen y conserva `CONFIG_ENCRYPTION_KEY`; sin ella no se pueden descifrar las credenciales guardadas.
 
 ## Herramientas MCP
 
-- Productos: listar, consultar, crear y actualizar (incluye listas de precio).
-- Clientes: listar, consultar, crear y actualizar.
+- Productos: listar, consultar, crear y actualizar.
+- Clientes Siigo: listar, consultar, crear y actualizar.
 - Cotizaciones: listar, consultar, crear y actualizar la misma cotización.
-- Catálogos: listar bodegas.
-- Inventario: lectura de existencias mediante productos.
+- Bodegas e inventario: lectura disponible.
 
-### Limitación de existencias
-
-La API pública de Siigo permite consultar cantidades por bodega y detectar cambios, pero no publica un endpoint para fijar stock directamente. Orbit lo comunica mediante `siigo_stock_capability` y evita simular movimientos contables. Los movimientos deben originarse en documentos de inventario admitidos por Siigo.
+La API pública de Siigo no expone un endpoint para fijar stock directamente. Orbit no simula movimientos contables; estos deben originarse en documentos de inventario admitidos por Siigo.
 
 ## Seguridad
 
-- Una instalación y volumen independiente por cliente.
-- Sesión administrativa HttpOnly con expiración de 8 horas.
-- API key por instalación almacenada únicamente como hash SHA-256.
-- Access Key Siigo cifrada con AES-256-GCM.
-- Reintentos de llamadas transitorias: máximo 3, intervalo de 5 segundos.
-- Registro de las últimas 250 operaciones sin secretos.
+- Credenciales Siigo cifradas con AES-256-GCM.
+- API keys almacenadas únicamente como hash SHA-256 y asociadas a un solo cliente.
+- Endpoint con ID de cliente más verificación de pertenencia de la clave.
+- Sesión administrativa HttpOnly con expiración de ocho horas.
+- Reintentos transitorios: máximo tres, cada cinco segundos.
+- Auditoría por cliente sin secretos y registro detallado de fallos.
 - Facturas y anulaciones no están expuestas.

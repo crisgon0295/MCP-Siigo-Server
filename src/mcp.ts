@@ -6,9 +6,9 @@ import { store } from "./store.js";
 const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
 const error = (value: unknown) => ({ isError: true, content: [{ type: "text" as const, text: value instanceof Error ? value.message : "Error desconocido" }] });
 
-export function createMcpServer() {
+export function createMcpServer(clientId: string) {
   const server = new McpServer({ name: "Orbit Siigo", version: "1.0.0" });
-  const run = async (action: string, operation: (client: SiigoClient) => Promise<unknown>) => { const started = Date.now(); try { const client = new SiigoClient(store.credentials(), process.env.DEMO_MODE === "true"); const result = await operation(client); store.audit(action, "success", "Operación completada", Date.now() - started); return json(result); } catch (cause) { store.audit(action, "failed", cause instanceof Error ? cause.message : "Error", Date.now() - started); return error(cause); } };
+  const run = async (action: string, operation: (client: SiigoClient) => Promise<unknown>) => { const started = Date.now(); try { const client = new SiigoClient(store.credentials(clientId), process.env.DEMO_MODE === "true"); const result = await operation(client); store.audit(clientId, action, "success", "Operación completada", Date.now() - started); return json(result); } catch (cause) { const typed = cause as { code?: string; requestId?: string }; store.audit(clientId, action, "failed", cause instanceof Error ? cause.message : "Error", Date.now() - started, { errorCode: typed.code, requestId: typed.requestId }); return error(cause); } };
 
   server.tool("siigo_list_products", "Lista productos, precios y existencias visibles en Siigo.", { page: z.number().int().min(1).default(1), page_size: z.number().int().min(1).max(100).default(25) }, ({ page, page_size }) => run("products.list", (c) => c.request(`/products?page=${page}&page_size=${page_size}`)));
   server.tool("siigo_get_product", "Consulta un producto por ID.", { id: z.string().uuid() }, ({ id }) => run("products.get", (c) => c.request(`/products/${id}`)));
