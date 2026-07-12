@@ -1,6 +1,14 @@
 export type SiigoCredentials = { username: string; accessKey: string; partnerId: string };
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function siigoErrorMessage(payload: unknown, fallback: string) {
+  if (!payload || typeof payload !== "object") return fallback;
+  const data = payload as { message?: unknown; Message?: unknown; errors?: Array<{ Message?: unknown; message?: unknown }> };
+  const first = data.errors?.[0];
+  const candidate = first?.Message ?? first?.message ?? data.Message ?? data.message;
+  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : fallback;
+}
+
 export class SiigoClient {
   private accessToken = "";
   private tokenExpiresAt = 0;
@@ -9,7 +17,11 @@ export class SiigoClient {
   private async token() {
     if (this.accessToken && this.tokenExpiresAt > Date.now() + 60_000) return this.accessToken;
     const response = await fetch("https://api.siigo.com/auth", { method: "POST", headers: { "Content-Type": "application/json", "Partner-Id": this.credentials.partnerId }, body: JSON.stringify({ username: this.credentials.username, access_key: this.credentials.accessKey }) });
-    if (!response.ok) throw new Error(`Autenticación Siigo rechazada (${response.status})`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      const detail = siigoErrorMessage(payload, "Siigo no aceptó el usuario o el Access Key");
+      throw Object.assign(new Error(`Autenticación Siigo rechazada (${response.status}): ${detail}`), { status: response.status, code: "SIIGO_AUTH_FAILED" });
+    }
     const data = await response.json() as { access_token: string; expires_in?: number };
     this.accessToken = data.access_token; this.tokenExpiresAt = Date.now() + (data.expires_in ?? 86_400) * 1000; return this.accessToken;
   }
