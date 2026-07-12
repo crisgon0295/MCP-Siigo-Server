@@ -20,7 +20,7 @@ export class SiigoClient {
     if (!response.ok) {
       const payload = await response.json().catch(() => null);
       const detail = siigoErrorMessage(payload, "Siigo no aceptó el usuario o el Access Key");
-      throw Object.assign(new Error(`Autenticación Siigo rechazada (${response.status}): ${detail}`), { status: response.status, code: "SIIGO_AUTH_FAILED" });
+      throw Object.assign(new Error(`Autenticación Siigo rechazada (${response.status}): ${detail}`), { status: response.status, code: "SIIGO_AUTH_FAILED", permanent: true, requestId: response.headers.get("x-request-id") ?? undefined });
     }
     const data = await response.json() as { access_token: string; expires_in?: number };
     this.accessToken = data.access_token; this.tokenExpiresAt = Date.now() + (data.expires_in ?? 86_400) * 1000; return this.accessToken;
@@ -28,15 +28,17 @@ export class SiigoClient {
 
   async request<T>(path: string, init: RequestInit = {}, retries = 3): Promise<T> {
     if (this.demo) return this.fake<T>(path, init.method ?? "GET");
+    const method = (init.method ?? "GET").toUpperCase();
+    const allowedAttempts = method === "GET" || method === "HEAD" || method === "PUT" ? retries : 1;
     let lastError: unknown;
-    for (let attempt = 1; attempt <= retries; attempt += 1) {
+    for (let attempt = 1; attempt <= allowedAttempts; attempt += 1) {
       try {
         const response = await fetch(`https://api.siigo.com/v1${path}`, { ...init, headers: { "Content-Type": "application/json", "Partner-Id": this.credentials.partnerId, Authorization: `Bearer ${await this.token()}`, ...init.headers } });
         if (response.status === 401) { this.accessToken = ""; this.tokenExpiresAt = 0; }
-        if (!response.ok) { const body = await response.text(); const error = new Error(`Siigo ${response.status}: ${body.slice(0, 300)}`); if (response.status < 500 && response.status !== 429) throw Object.assign(error, { permanent: true }); throw error; }
+        if (!response.ok) { const payload = await response.json().catch(() => null); const detail = siigoErrorMessage(payload, "Siigo rechazó la operación"); const extra = { status: response.status, code: `SIIGO_HTTP_${response.status}`, requestId: response.headers.get("x-request-id") ?? undefined }; const error = Object.assign(new Error(`Siigo ${response.status}: ${detail}`), extra); if (response.status < 500 && response.status !== 429) throw Object.assign(error, { permanent: true }); throw error; }
         if (response.status === 204) return {} as T;
         return await response.json() as T;
-      } catch (error) { lastError = error; if ((error as { permanent?: boolean }).permanent || attempt === retries) break; await wait(5_000); }
+      } catch (error) { lastError = error; if ((error as { permanent?: boolean }).permanent || attempt === allowedAttempts) break; await wait(5_000); }
     }
     throw lastError;
   }

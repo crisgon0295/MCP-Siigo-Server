@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 
 const sessionSecret = process.env.SESSION_SECRET ?? "orbit-local-development";
+if (process.env.NODE_ENV === "production" && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32 || !process.env.ADMIN_USERNAME || !process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD.length < 16 || ["change-this-admin-password", "orbit-demo"].includes(process.env.ADMIN_PASSWORD))) throw new Error("Producción requiere ADMIN_PASSWORD de 16+ caracteres y SESSION_SECRET de 32+ caracteres");
 const sign = (value: string) => crypto.createHmac("sha256", sessionSecret).update(value).digest("base64url");
 const safeEqual = (a: string, b: string) => { const aa = Buffer.from(a); const bb = Buffer.from(b); return aa.length === bb.length && crypto.timingSafeEqual(aa, bb); };
 

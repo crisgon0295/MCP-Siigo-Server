@@ -14,7 +14,9 @@ try {
   const login = await request("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: "admin", password: "orbit-demo" }) });
   const session = login.response.headers.get("set-cookie")?.split(";")[0];
   if (!session) throw new Error("No session cookie");
-  const created = await request("/api/clients", { method: "POST", headers: { "Content-Type": "application/json", Cookie: session }, body: JSON.stringify({ companyName: "Smoke" }) });
+  const incomplete = await fetch(`http://127.0.0.1:${port}/api/clients`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: session }, body: JSON.stringify({ companyName: "Incomplete" }) });
+  if (incomplete.status !== 400) throw new Error("Incomplete client credentials must be rejected");
+  const created = await request("/api/clients", { method: "POST", headers: { "Content-Type": "application/json", Cookie: session }, body: JSON.stringify({ companyName: "Smoke", siigoUsername: "Demo@siigo.com", accessKey: " demo ", partnerId: "orbitSmoke" }) });
   const id = created.body.id;
   const tested = await request(`/api/clients/${id}/test`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: session }, body: JSON.stringify({ companyName: "Smoke", siigoUsername: "Demo@siigo.com", accessKey: " demo ", partnerId: "orbitSmoke" }) });
   if (tested.body.client?.companyName !== "Smoke" || tested.body.client?.siigoUsername !== "Demo@siigo.com") throw new Error("Current form values were not saved before testing");
@@ -25,6 +27,17 @@ try {
   await request(`/api/clients/${id}/errors`, { headers: { Cookie: session } });
   const initialized = await request(`/mcp/${id}`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${rotated.body.apiKey}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "1" } } }) });
   if (initialized.body.result?.serverInfo?.name !== "Orbit Siigo") throw new Error("MCP initialization failed");
+  await request(`/mcp/${id}`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${rotated.body.apiKey}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "siigo_list_products", arguments: { page: 1, page_size: 1 } } }) });
+  const usage = await request(`/api/clients/${id}/usage?period=30d`, { headers: { Cookie: session } });
+  if (usage.body.total !== 1 || usage.body.success !== 1) throw new Error("MCP usage must exclude administrative events");
+  const second = await request("/api/clients", { method: "POST", headers: { "Content-Type": "application/json", Cookie: session }, body: JSON.stringify({ companyName: "Second", siigoUsername: "second@siigo.com", accessKey: "second-secret", partnerId: "secondPartner" }) });
+  const cross = await fetch(`http://127.0.0.1:${port}/mcp/${second.body.id}`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${rotated.body.apiKey}` }, body: "{}" });
+  if (cross.status !== 401) throw new Error("A client API key must not authorize another client");
+  const replacement = await request(`/api/clients/${id}/api-key/rotate`, { method: "POST", headers: { Cookie: session } });
+  const oldKey = await fetch(`http://127.0.0.1:${port}/mcp/${id}`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${rotated.body.apiKey}` }, body: "{}" });
+  if (oldKey.status !== 401 || !replacement.body.apiKey) throw new Error("Rotating an API key must invalidate the previous key");
+  const persisted = fs.readFileSync(statePath, "utf8");
+  if (persisted.includes("second-secret") || persisted.includes('" demo "')) throw new Error("Siigo Access Keys must never be stored in plaintext");
   console.log("Smoke test passed: health, auth, isolated client, encrypted config, usage, API key and MCP");
 } finally {
   server.kill();

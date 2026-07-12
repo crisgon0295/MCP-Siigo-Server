@@ -46,6 +46,6 @@ La API pública de Siigo no expone un endpoint para fijar stock directamente. Or
 - API keys almacenadas únicamente como hash SHA-256 y asociadas a un solo cliente.
 - Endpoint con ID de cliente más verificación de pertenencia de la clave.
 - Sesión administrativa HttpOnly con expiración de ocho horas.
-- Reintentos transitorios: máximo tres, cada cinco segundos.
+- Reintentos transitorios: máximo tres, cada cinco segundos, solo para lecturas y actualizaciones idempotentes. Las creaciones `POST` no se repiten automáticamente para evitar duplicar documentos si Siigo procesó la solicitud pero se perdió la respuesta.
 - Auditoría por cliente sin secretos y registro detallado de fallos.
 - Facturas y anulaciones no están expuestas.

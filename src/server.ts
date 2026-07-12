@@ -2,13 +2,15 @@ import "dotenv/config";
 import path from "node:path";
 import express, { type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { cookie, createSession, requireAdmin, verifyPassword } from "./auth.js";
+import { cookie, createSession, requireAdmin, validSession, verifyPassword } from "./auth.js";
 import { createMcpServer } from "./mcp.js";
 import { SiigoClient } from "./siigo.js";
 import { store } from "./store.js";
 
 const app = express();
 app.disable("x-powered-by");
+if (process.env.NODE_ENV === "production") app.set("trust proxy", 1);
+app.use((_req, res, next) => { res.setHeader("X-Content-Type-Options", "nosniff"); res.setHeader("Referrer-Policy", "no-referrer"); res.setHeader("X-Frame-Options", "DENY"); res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()"); res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"); if (process.env.NODE_ENV === "production") res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains"); next(); });
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(process.cwd(), "public")));
 
@@ -16,14 +18,18 @@ const tools = ["siigo_list_products", "siigo_get_product", "siigo_create_product
 const param = (value: string | string[]) => Array.isArray(value) ? value[0] : value;
 const fail = (res: Response, error: unknown, fallback = "No fue posible completar la operación") => { const typed = error as { status?: number; code?: string }; res.status(typed.status ?? 500).json({ error: error instanceof Error ? error.message : fallback, code: typed.code }); };
 const validateConfiguration = (body: Record<string, unknown>) => { const companyName = String(body.companyName ?? "").trim(); const siigoUsername = String(body.siigoUsername ?? "").trim(); const partnerId = String(body.partnerId ?? "").trim(); if (!companyName || !siigoUsername || !partnerId) throw Object.assign(new Error("Empresa, usuario Siigo y Partner-ID son obligatorios"), { status: 400 }); return { companyName, siigoUsername, partnerId, accessKey: body.accessKey ? String(body.accessKey) : undefined }; };
+const validateNewClient = (body: Record<string, unknown>) => { const input = validateConfiguration(body); if (!input.accessKey?.trim()) throw Object.assign(new Error("El Access Key de Siigo es obligatorio para crear el cliente"), { status: 400 }); return input as { companyName: string; siigoUsername: string; partnerId: string; accessKey: string }; };
 
-app.get("/health", (_req, res) => res.json({ status: "ok", service: "orbit-siigo", clients: store.clients().length }));
-app.post("/api/login", (req, res) => { const { username, password } = req.body ?? {}; if (!verifyPassword(String(username ?? ""), String(password ?? ""))) return res.status(401).json({ error: "Usuario o contraseña incorrectos" }); res.setHeader("Set-Cookie", `orbit_session=${createSession(username)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${process.env.NODE_ENV === "production" ? "; Secure" : ""}`); res.json({ ok: true }); });
+const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+function blockedLogin(key: string, limit: number) { const now = Date.now(); if (loginAttempts.size > 2000) for (const [entryKey, value] of loginAttempts) { if (value.resetAt <= now || loginAttempts.size > 1500) loginAttempts.delete(entryKey); } const attempt = loginAttempts.get(key); return Boolean(attempt && attempt.resetAt > now && attempt.count >= limit); }
+function failedLogin(key: string) { const now = Date.now(); const attempt = loginAttempts.get(key); loginAttempts.set(key, { count: attempt && attempt.resetAt > now ? attempt.count + 1 : 1, resetAt: now + 15 * 60_000 }); }
+app.get("/health", (_req, res) => res.json({ status: "ok", service: "orbit-siigo" }));
+app.post("/api/login", (req, res) => { const username = String(req.body?.username ?? ""); const ipKey = `ip:${req.ip}`; const userKey = `user:${username.toLowerCase()}`; if (blockedLogin(ipKey, 20) || blockedLogin(userKey, 5)) return res.status(429).json({ error: "Demasiados intentos. Espera 15 minutos" }); if (!verifyPassword(username, String(req.body?.password ?? ""))) { failedLogin(ipKey); failedLogin(userKey); return res.status(401).json({ error: "Usuario o contraseña incorrectos" }); } loginAttempts.delete(userKey); res.setHeader("Set-Cookie", `orbit_session=${createSession(username)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${process.env.NODE_ENV === "production" ? "; Secure" : ""}`); res.json({ ok: true }); });
 app.post("/api/logout", (_req, res) => { res.setHeader("Set-Cookie", "orbit_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"); res.json({ ok: true }); });
-app.get("/api/me", (req, res) => res.json({ authenticated: Boolean(cookie(req, "orbit_session")), demo: process.env.DEMO_MODE === "true" }));
+app.get("/api/me", (req, res) => res.json({ authenticated: validSession(cookie(req, "orbit_session")), demo: process.env.DEMO_MODE === "true" }));
 
 app.get("/api/clients", requireAdmin, (_req, res) => res.json(store.clients()));
-app.post("/api/clients", requireAdmin, (req, res) => { try { const companyName = String(req.body?.companyName ?? "").trim(); if (!companyName) return res.status(400).json({ error: "El nombre de la empresa es obligatorio" }); res.status(201).json(store.createClient({ companyName, siigoUsername: req.body.siigoUsername, partnerId: req.body.partnerId, accessKey: req.body.accessKey })); } catch (error) { fail(res, error); } });
+app.post("/api/clients", requireAdmin, (req, res) => { try { res.status(201).json(store.createClient(validateNewClient(req.body ?? {}))); } catch (error) { fail(res, error); } });
 app.get("/api/clients/:id", requireAdmin, (req, res) => { try { res.json(store.client(param(req.params.id))); } catch (error) { fail(res, error); } });
 app.put("/api/clients/:id", requireAdmin, (req, res) => { try { const id = param(req.params.id); const result = store.configure(id, validateConfiguration(req.body ?? {})); store.audit(id, "client.configure", "success", "Configuración actualizada"); res.json(result); } catch (error) { fail(res, error); } });
 app.post("/api/clients/:id/test", requireAdmin, async (req, res) => {
@@ -39,7 +45,7 @@ app.post("/api/clients/:id/test", requireAdmin, async (req, res) => {
   }
 });
 app.post("/api/clients/:id/api-key/rotate", requireAdmin, (req, res) => { try { res.json({ apiKey: store.rotateApiKey(param(req.params.id)) }); } catch (error) { fail(res, error); } });
-app.get("/api/clients/:id/audit", requireAdmin, (req, res) => res.json(store.audits(param(req.params.id), Math.min(Number(req.query.limit ?? 100), 250))));
+app.get("/api/clients/:id/audit", requireAdmin, (req, res) => { const id = param(req.params.id); const limit = Math.min(Number(req.query.limit ?? 100), 250); res.json(req.query.scope === "mcp" ? store.mcpAudits(id, limit) : store.audits(id, limit)); });
 app.get("/api/clients/:id/errors", requireAdmin, (req, res) => res.json(store.errors(param(req.params.id))));
 app.get("/api/clients/:id/usage", requireAdmin, (req, res) => res.json(store.usage(param(req.params.id), String(req.query.period ?? "30d"))));
 app.get("/api/audit", requireAdmin, (_req, res) => res.json(store.audits(undefined, 150)));
